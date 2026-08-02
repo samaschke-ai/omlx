@@ -5,14 +5,13 @@ from omlx.custom_kernels.glm_moe_dsa import fast as glm_fast
 
 
 @pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
-@pytest.mark.parametrize("variant", [0, 3])
-def test_masked_row_matches_gather_qmm(dtype, variant):
+def test_masked_row_matches_gather_qmm(dtype):
     if not glm_fast.has_symbol("deepseek_mxfp4_gather_qmm_masked_row"):
         pytest.skip("masked-row native kernel is unavailable")
 
     mx.random.seed(7)
     experts, tokens, topk = 8, 6, 6
-    input_dims, output_dims = 256, 256
+    input_dims, output_dims = 512, 256
     routes = tokens * topk
 
     x = mx.random.normal((tokens, 1, input_dims)).astype(dtype)
@@ -39,10 +38,11 @@ def test_masked_row_matches_gather_qmm(dtype, variant):
         scales,
         indices,
         route_mask,
-        variant,
+        0,
     )
     mx.eval(reference, actual)
 
     assert actual.shape == (routes, 1, output_dims)
-    assert mx.all(actual[~route_mask] == 0).item()
+    mask3 = route_mask[:, None, None]
+    assert mx.all(mx.where(mask3, 0, actual) == 0).item()
     assert mx.allclose(actual, reference, rtol=2e-2, atol=2e-2).item()
