@@ -1735,7 +1735,7 @@ array deepseek_mxfp4_gather_qmm_masked_row(
         "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_row] unsupported shape.");
   }
 
-  Shape out_shape{indices.size(), 1, N};
+  Shape out_shape{static_cast<int>(indices.size()), 1, N};
   return array(
       std::move(out_shape),
       x.dtype(),
