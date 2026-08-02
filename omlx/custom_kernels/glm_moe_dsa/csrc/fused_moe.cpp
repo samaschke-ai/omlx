@@ -960,9 +960,8 @@ class DeepseekAffineGatherPairBlocksPrimitive : public Primitive {
 
 class DeepseekMxfp4GatherMaskedRowPrimitive : public Primitive {
  public:
-  explicit DeepseekMxfp4GatherMaskedRowPrimitive(
-      Stream stream, int variant, bool pair = false)
-      : Primitive(stream), variant_(variant), pair_(pair) {
+  explicit DeepseekMxfp4GatherMaskedRowPrimitive(Stream stream, int variant)
+      : Primitive(stream), variant_(variant) {
     if (variant_ != 0) {
       throw std::invalid_argument(
           "DeepSeek masked-row QMV supports only variant 0.");
@@ -1032,8 +1031,8 @@ class DeepseekMxfp4GatherMaskedRowPrimitive : public Primitive {
     const auto& x = inputs[0];
     const auto& weight = inputs[1];
     const auto& scales = inputs[2];
-    const auto& indices = inputs[pair_ ? 5 : 3];
-    const auto& route_mask = inputs[pair_ ? 6 : 4];
+    const auto& indices = inputs[3];
+    const auto& route_mask = inputs[4];
 
     out.set_data(allocator::malloc(out.nbytes()));
 
@@ -1046,8 +1045,7 @@ class DeepseekMxfp4GatherMaskedRowPrimitive : public Primitive {
     std::string kname;
     concatenate(
         kname,
-        pair_ ? "deepseek_mxfp4_gather_masked_pair_qmv_"
-              : "deepseek_mxfp4_gather_masked_row_qmv_",
+        "deepseek_mxfp4_gather_masked_row_qmv_",
         glm_type_name(x.dtype()));
 
     auto lib = d.get_library("omlx_glm_kernels", current_binary_dir());
@@ -1057,27 +1055,14 @@ class DeepseekMxfp4GatherMaskedRowPrimitive : public Primitive {
     compute_encoder.set_input_array(x, 0);
     compute_encoder.set_input_array(weight, 1);
     compute_encoder.set_input_array(scales, 2);
-    if (pair_) {
-      compute_encoder.set_input_array(inputs[3], 3);
-      compute_encoder.set_input_array(inputs[4], 4);
-      compute_encoder.set_input_array(indices, 5);
-      compute_encoder.set_input_array(route_mask, 6);
-      compute_encoder.set_output_array(out, 7);
-      compute_encoder.set_bytes(T_rows, 8);
-      compute_encoder.set_bytes(M, 9);
-      compute_encoder.set_bytes(N, 10);
-      compute_encoder.set_bytes(K, 11);
-      compute_encoder.set_bytes(E, 12);
-    } else {
-      compute_encoder.set_input_array(indices, 3);
-      compute_encoder.set_input_array(route_mask, 4);
-      compute_encoder.set_output_array(out, 5);
-      compute_encoder.set_bytes(T_rows, 6);
-      compute_encoder.set_bytes(M, 7);
-      compute_encoder.set_bytes(N, 8);
-      compute_encoder.set_bytes(K, 9);
-      compute_encoder.set_bytes(E, 10);
-    }
+    compute_encoder.set_input_array(indices, 3);
+    compute_encoder.set_input_array(route_mask, 4);
+    compute_encoder.set_output_array(out, 5);
+    compute_encoder.set_bytes(T_rows, 6);
+    compute_encoder.set_bytes(M, 7);
+    compute_encoder.set_bytes(N, 8);
+    compute_encoder.set_bytes(K, 9);
+    compute_encoder.set_bytes(E, 10);
 
     MTL::Size grid_dims(M, (N + 7) / 8, 1);
     MTL::Size group_dims(64, 1, 1);
@@ -1089,15 +1074,14 @@ class DeepseekMxfp4GatherMaskedRowPrimitive : public Primitive {
   bool is_equivalent(const Primitive& other) const override {
     const auto& rhs =
         static_cast<const DeepseekMxfp4GatherMaskedRowPrimitive&>(other);
-    return variant_ == rhs.variant_ && pair_ == rhs.pair_;
+    return variant_ == rhs.variant_;
   }
   auto state() const {
-    return std::make_tuple(variant_, pair_);
+    return std::make_tuple(variant_);
   }
 
  private:
   int variant_;
-  bool pair_;
 };
 
 class DeepseekMxfp4GatherExpertPrimitive : public Primitive {
@@ -1753,46 +1737,6 @@ array deepseek_mxfp4_gather_qmm_masked_row(
       std::move(out_shape),
       x.dtype(),
       std::make_shared<DeepseekMxfp4GatherMaskedRowPrimitive>(stream, variant),
-      std::move(inputs));
-}
-
-array deepseek_mxfp4_gather_qmm_masked_pair(
-    const array& x,
-    const array& weight0,
-    const array& scales0,
-    const array& weight1,
-    const array& scales1,
-    const array& indices,
-    const array& route_mask,
-    int variant,
-    StreamOrDevice s /* = {} */) {
-  if (variant != 0) {
-    throw std::invalid_argument(
-        "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_pair] "
-        "only variant 0 is supported.");
-  }
-  auto stream = to_stream(s);
-  if (DeepseekMxfp4GatherMaskedRowPrimitive::unsupported(
-          x, weight0, scales0, indices, route_mask, stream) ||
-      DeepseekMxfp4GatherMaskedRowPrimitive::unsupported(
-          x, weight1, scales1, indices, route_mask, stream) ||
-      weight0.shape(0) != weight1.shape(0) ||
-      weight0.shape(1) != weight1.shape(1) ||
-      weight0.shape(2) != weight1.shape(2)) {
-    throw std::invalid_argument(
-        "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_pair] "
-        "unsupported shape.");
-  }
-
-  const int N = weight0.shape(1);
-  std::vector<array> inputs = {
-      x, weight0, scales0, weight1, scales1, indices, route_mask};
-  Shape out_shape{static_cast<int>(indices.size()), 1, 2 * N};
-  return array(
-      std::move(out_shape),
-      x.dtype(),
-      std::make_shared<DeepseekMxfp4GatherMaskedRowPrimitive>(
-          stream, variant, true),
       std::move(inputs));
 }
 
