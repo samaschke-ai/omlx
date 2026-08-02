@@ -1189,8 +1189,8 @@ template <
       true,
       BK_padded,
       BK_padded>;
-  using loader_x_t =
-      BlockLoader<T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
+  using loader_x_t = mlx::steel::BlockLoader<
+      T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
   using loader_w_t = QuantizedBlockLoader<
       T,
       BN,
