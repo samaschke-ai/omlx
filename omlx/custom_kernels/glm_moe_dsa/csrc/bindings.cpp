@@ -215,6 +215,18 @@ NB_MODULE(_ext, m) {
       "variant"_a = 0,
       "stream"_a = nb::none());
   m.def(
+      "deepseek_mxfp4_gather_qmm_masked_pair",
+      &omlx::glm_kernels::deepseek_mxfp4_gather_qmm_masked_pair,
+      "x"_a,
+      "weight0"_a,
+      "scales0"_a,
+      "weight1"_a,
+      "scales1"_a,
+      "indices"_a,
+      "route_mask"_a,
+      "variant"_a = 0,
+      "stream"_a = nb::none());
+  m.def(
       "deepseek_mxfp4_gather_qmm_expert",
       &omlx::glm_kernels::deepseek_mxfp4_gather_qmm_expert,
       "x"_a,

@@ -86,6 +86,7 @@ NATIVE_SYMBOLS = (
     "deepseek_mxfp4_gather_qmm_pair_blocks",
     "deepseek_mxfp4_gather_qmm_pair_concat_blocks",
     "deepseek_mxfp4_gather_qmm_masked_row",
+    "deepseek_mxfp4_gather_qmm_masked_pair",
     "deepseek_mxfp4_gather_qmm_expert",
     "deepseek_affine_gather_qmm_blocks",
     "deepseek_affine_gather_qmm_pair_concat_blocks",
@@ -536,6 +537,37 @@ def deepseek_mxfp4_gather_qmm_masked_row(
         )
     raise RuntimeError(
         "deepseek_mxfp4_gather_qmm_masked_row native kernel is unavailable"
+    )
+
+
+def deepseek_mxfp4_gather_qmm_masked_pair(
+    x: mx.array,
+    weight0: mx.array,
+    scales0: mx.array,
+    weight1: mx.array,
+    scales1: mx.array,
+    indices: mx.array,
+    route_mask: mx.array,
+    variant: int = 0,
+    *,
+    stream=None,
+) -> mx.array:
+    if _ext is not None and hasattr(
+        _ext, "deepseek_mxfp4_gather_qmm_masked_pair"
+    ):
+        return _ext.deepseek_mxfp4_gather_qmm_masked_pair(
+            x,
+            weight0,
+            scales0,
+            weight1,
+            scales1,
+            indices,
+            route_mask,
+            variant,
+            **_native_stream_kwargs(stream),
+        )
+    raise RuntimeError(
+        "deepseek_mxfp4_gather_qmm_masked_pair native kernel is unavailable"
     )
 
 

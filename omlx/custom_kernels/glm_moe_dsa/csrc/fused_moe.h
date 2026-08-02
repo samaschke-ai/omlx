@@ -88,6 +88,17 @@ mx::array deepseek_mxfp4_gather_qmm_masked_row(
     int variant = 0,
     mx::StreamOrDevice s = {});
 
+mx::array deepseek_mxfp4_gather_qmm_masked_pair(
+    const mx::array& x,
+    const mx::array& weight0,
+    const mx::array& scales0,
+    const mx::array& weight1,
+    const mx::array& scales1,
+    const mx::array& indices,
+    const mx::array& route_mask,
+    int variant = 0,
+    mx::StreamOrDevice s = {});
+
 mx::array deepseek_mxfp4_gather_qmm_expert(
     const mx::array& x,
     const mx::array& weight,
