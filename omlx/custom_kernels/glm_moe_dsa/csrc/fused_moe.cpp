@@ -958,6 +958,140 @@ class DeepseekAffineGatherPairBlocksPrimitive : public Primitive {
   int variant_;
 };
 
+class DeepseekMxfp4GatherMaskedRowPrimitive : public Primitive {
+ public:
+  explicit DeepseekMxfp4GatherMaskedRowPrimitive(Stream stream, int variant)
+      : Primitive(stream), variant_(variant) {
+    (void)mxfp4_blocks_variant(variant_);
+  }
+
+  static bool unsupported(
+      const array& x,
+      const array& weight,
+      const array& scales,
+      const array& indices,
+      const array& route_mask,
+      Stream s) {
+    if (s.device == Device::cpu) {
+      return true;
+    }
+    if (x.dtype() != float16 && x.dtype() != bfloat16) {
+      return true;
+    }
+    if (weight.dtype() != uint32 || scales.dtype() != uint8 ||
+        (indices.dtype() != uint32 && indices.dtype() != int32) ||
+        route_mask.dtype() != bool_) {
+      return true;
+    }
+    if (x.ndim() != 3 || x.shape(1) != 1 || weight.ndim() != 3 ||
+        scales.ndim() != 3 || indices.ndim() != 1 || route_mask.ndim() != 1 ||
+        indices.size() != route_mask.size()) {
+      return true;
+    }
+    if (x.shape(0) <= 0 || indices.size() % x.shape(0) != 0) {
+      return true;
+    }
+    if (!row_contiguous(x) || !row_contiguous(weight) ||
+        !row_contiguous(scales) || !row_contiguous(indices) ||
+        !row_contiguous(route_mask)) {
+      return true;
+    }
+
+    constexpr int bits = 4;
+    constexpr int group_size = 32;
+    constexpr int values_per_uint32 = 32 / bits;
+    const int K = x.shape(2);
+    const int E = weight.shape(0);
+    const int N = weight.shape(1);
+    if (x.shape(0) <= 0 || indices.size() <= 0 || K <= 0 || N <= 0 || E <= 0) {
+      return true;
+    }
+    return weight.shape(2) * values_per_uint32 != K ||
+        scales.shape(0) != E || scales.shape(1) != N ||
+        scales.shape(2) != K / group_size;
+  }
+
+  void eval_cpu(
+      const std::vector<array>& /* inputs */,
+      std::vector<array>& /* outputs */) override {
+    throw std::runtime_error(
+        "DeepseekMxfp4GatherMaskedRowPrimitive has no CPU path.");
+  }
+
+  void eval_gpu(
+      const std::vector<array>& inputs,
+      std::vector<array>& outputs) override {
+    auto& s = stream();
+    auto& d = metal::device(s.device);
+    auto& out = outputs[0];
+
+    const auto& x = inputs[0];
+    const auto& weight = inputs[1];
+    const auto& scales = inputs[2];
+    const auto& indices = inputs[3];
+    const auto& route_mask = inputs[4];
+
+    out.set_data(allocator::malloc(out.nbytes()));
+
+    const auto cfg = mxfp4_blocks_variant(variant_);
+    const int T_rows = x.shape(0);
+    const int M = indices.size();
+    const int K = x.shape(2);
+    const int E = weight.shape(0);
+    const int N = weight.shape(1);
+
+    std::string kname;
+    concatenate(
+        kname,
+        "deepseek_mxfp4_gather_masked_row_rhs_",
+        glm_type_name(x.dtype()),
+        "_bm_",
+        cfg.bm,
+        "_bn_",
+        cfg.bn,
+        "_bk_",
+        cfg.bk,
+        "_wm_",
+        cfg.wm,
+        "_wn_",
+        cfg.wn);
+
+    auto lib = d.get_library("omlx_glm_kernels", current_binary_dir());
+    auto kernel = d.get_kernel(kname, lib);
+    auto& compute_encoder = metal::get_command_encoder(s);
+    compute_encoder.set_compute_pipeline_state(kernel);
+    compute_encoder.set_input_array(x, 0);
+    compute_encoder.set_input_array(weight, 1);
+    compute_encoder.set_input_array(scales, 2);
+    compute_encoder.set_input_array(indices, 3);
+    compute_encoder.set_input_array(route_mask, 4);
+    compute_encoder.set_output_array(out, 5);
+    compute_encoder.set_bytes(T_rows, 6);
+    compute_encoder.set_bytes(M, 7);
+    compute_encoder.set_bytes(N, 8);
+    compute_encoder.set_bytes(K, 9);
+    compute_encoder.set_bytes(E, 10);
+
+    MTL::Size grid_dims((N + cfg.bn - 1) / cfg.bn, M, 1);
+    MTL::Size group_dims(cfg.wm * cfg.wn * 32, 1, 1);
+    compute_encoder.dispatch_threadgroups(grid_dims, group_dims);
+  }
+
+  DEFINE_NAME(DeepseekMxfp4GatherMaskedRowPrimitive)
+  DEFINE_INPUT_OUTPUT_SHAPE()
+  bool is_equivalent(const Primitive& other) const override {
+    const auto& rhs =
+        static_cast<const DeepseekMxfp4GatherMaskedRowPrimitive&>(other);
+    return variant_ == rhs.variant_;
+  }
+  auto state() const {
+    return std::make_tuple(variant_);
+  }
+
+ private:
+  int variant_;
+};
+
 class DeepseekMxfp4GatherExpertPrimitive : public Primitive {
  public:
   explicit DeepseekMxfp4GatherExpertPrimitive(Stream stream, int variant)
@@ -1540,6 +1674,72 @@ array deepseek_affine_gather_qmm_pair_concat_blocks(
       x.dtype(),
       std::make_shared<DeepseekAffineGatherPairBlocksPrimitive>(
           stream, group_size, bits, variant),
+      std::move(inputs));
+}
+
+array deepseek_mxfp4_gather_qmm_masked_row(
+    const array& x,
+    const array& weight,
+    const array& scales,
+    const array& indices,
+    const array& route_mask,
+    int variant,
+    StreamOrDevice s /* = {} */) {
+  (void)mxfp4_blocks_variant(variant);
+
+  if (x.ndim() != 3 || x.shape(1) != 1 || weight.ndim() != 3 ||
+      scales.ndim() != 3 || indices.ndim() != 1 || route_mask.ndim() != 1 ||
+      indices.size() != route_mask.size() || x.shape(0) == 0 ||
+      indices.size() % x.shape(0) != 0) {
+    std::ostringstream msg;
+    msg << "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_row] expected "
+        << "x [T,1,K], weight [E,N,K/8], scales [E,N,K/32], "
+        << "indices [M], route_mask [M], and M divisible by T; got "
+        << x.shape() << ", " << weight.shape() << ", " << scales.shape()
+        << ", " << indices.shape() << ", " << route_mask.shape() << ".";
+    throw std::invalid_argument(msg.str());
+  }
+
+  constexpr int bits = 4;
+  constexpr int group_size = 32;
+  constexpr int values_per_uint32 = 32 / bits;
+  const int K = x.shape(2);
+  const int E = weight.shape(0);
+  const int N = weight.shape(1);
+  if (weight.shape(2) * values_per_uint32 != K || scales.shape(0) != E ||
+      scales.shape(1) != N || scales.shape(2) != K / group_size) {
+    std::ostringstream msg;
+    msg << "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_row] "
+        << "incompatible shapes: " << x.shape() << ", " << weight.shape()
+        << ", " << scales.shape() << ".";
+    throw std::invalid_argument(msg.str());
+  }
+  if (x.dtype() != float16 && x.dtype() != bfloat16) {
+    throw std::invalid_argument(
+        "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_row] expected "
+        "float16 or bfloat16 input.");
+  }
+  if (weight.dtype() != uint32 || scales.dtype() != uint8 ||
+      (indices.dtype() != uint32 && indices.dtype() != int32) ||
+      route_mask.dtype() != bool_) {
+    throw std::invalid_argument(
+        "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_row] expected "
+        "uint32 weights, uint8 scales, integer indices, and bool route mask.");
+  }
+
+  auto stream = to_stream(s);
+  std::vector<array> inputs = {x, weight, scales, indices, route_mask};
+  if (DeepseekMxfp4GatherMaskedRowPrimitive::unsupported(
+          x, weight, scales, indices, route_mask, stream)) {
+    throw std::invalid_argument(
+        "[omlx_glm_kernels.deepseek_mxfp4_gather_qmm_masked_row] unsupported shape.");
+  }
+
+  Shape out_shape{indices.size(), 1, N};
+  return array(
+      std::move(out_shape),
+      x.dtype(),
+      std::make_shared<DeepseekMxfp4GatherMaskedRowPrimitive>(stream, variant),
       std::move(inputs));
 }
 
