@@ -1149,6 +1149,64 @@ template <
   }
 }
 
+template <typename T>
+[[kernel]] void deepseek_mxfp4_gather_masked_row_qmv(
+    const device T* x [[buffer(0)]],
+    const device uint32_t* w [[buffer(1)]],
+    const device uint8_t* scales [[buffer(2)]],
+    const device uint32_t* indices [[buffer(3)]],
+    const device bool* route_mask [[buffer(4)]],
+    device T* y [[buffer(5)]],
+    const constant int& T_rows [[buffer(6)]],
+    const constant int& M [[buffer(7)]],
+    const constant int& N [[buffer(8)]],
+    const constant int& K [[buffer(9)]],
+    const constant int& E [[buffer(10)]],
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]]) {
+  constexpr int outputs_per_group = 8;
+  const int row = int(tid.x);
+  const int out_row = int(tid.y) * outputs_per_group +
+      int(simd_group_id) * (outputs_per_group / 2);
+  if (row >= M || out_row >= N) {
+    return;
+  }
+
+  const int expert = int(indices[row]);
+  if (!route_mask[row] || expert < 0 || expert >= E) {
+    if (simd_lane_id == 0) {
+      for (int i = 0; i < outputs_per_group / 2 && out_row + i < N; ++i) {
+        y[size_t(row) * N + out_row + i] = T(0);
+      }
+    }
+    return;
+  }
+
+  const int source_row = (row * T_rows) / M;
+  const size_t weight_stride = size_t(N) * (K / 8);
+  const size_t scale_stride = size_t(N) * (K / 32);
+  uint3 local_tid = uint3(0, tid.y, 0);
+  fp_qmv_fast_impl<T, 32, 4>(
+      w + size_t(expert) * weight_stride,
+      scales + size_t(expert) * scale_stride,
+      x + size_t(source_row) * K,
+      y + size_t(row) * N,
+      K,
+      N,
+      local_tid,
+      simd_group_id,
+      simd_lane_id);
+}
+
+#define instantiate_deepseek_mxfp4_masked_row(type)                           \
+  template [[host_name("deepseek_mxfp4_gather_masked_row_qmv_" #type)]]      \
+  [[kernel]] decltype(deepseek_mxfp4_gather_masked_row_qmv<type>)             \
+      deepseek_mxfp4_gather_masked_row_qmv<type>
+
+instantiate_deepseek_mxfp4_masked_row(float16_t);
+instantiate_deepseek_mxfp4_masked_row(bfloat16_t);
+
 #define instantiate_deepseek_mxfp4_expert(type, bm, bn, bk, wm, wn)            \
   instantiate_kernel(                                                          \
       "deepseek_mxfp4_gather_expert_rhs_" #type "_bm_" #bm "_bn_" #bn         \

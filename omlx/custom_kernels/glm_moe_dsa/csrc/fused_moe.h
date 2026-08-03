@@ -79,6 +79,15 @@ mx::array deepseek_affine_gather_qmm_pair_concat_blocks(
     int variant = 0,
     mx::StreamOrDevice s = {});
 
+mx::array deepseek_mxfp4_gather_qmm_masked_row(
+    const mx::array& x,
+    const mx::array& weight,
+    const mx::array& scales,
+    const mx::array& indices,
+    const mx::array& route_mask,
+    int variant = 0,
+    mx::StreamOrDevice s = {});
+
 mx::array deepseek_mxfp4_gather_qmm_expert(
     const mx::array& x,
     const mx::array& weight,
